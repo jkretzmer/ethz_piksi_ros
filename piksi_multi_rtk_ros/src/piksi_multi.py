@@ -20,6 +20,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, PointStamped, PoseWithC
 # Import Piksi SBP library
 from sbp.client.drivers.pyserial_driver import PySerialDriver
 from sbp.client import Handler, Framer
+from sbp.table import dispatch
 from sbp.navigation import *
 from sbp.logging import *
 from sbp.system import *
@@ -42,6 +43,13 @@ import re
 import threading
 import sys
 import collections
+import warnings
+
+# suppress warnings from SBP
+def dispatch_suppress_warn(msg):
+    with warnings.catch_warnings():
+        wanings.simplefilter("ignore")
+        dispatch(msg)
 
 
 class PiksiMulti:
@@ -85,7 +93,7 @@ class PiksiMulti:
             raise
 
         # Create a handler to connect Piksi driver to callbacks.
-        self.framer = Framer(self.driver.read, self.driver.write, verbose=False)
+        self.framer = Framer(self.driver.read, self.driver.write, verbose=False, dispatcher=dispatch_suppress_warn)
         self.handler = Handler(self.framer)
 
         self.debug_mode = rospy.get_param('~debug_mode', False)
@@ -427,7 +435,7 @@ class PiksiMulti:
             for attr in attrs:
                 if attr == 'flags':
                     # Least significat three bits of flags indicate status.
-                    if (msg.flags & 0x07) == 0:
+                    if (sbp_message.flags & 0x07) == 0:
                         return  # Invalid message, do not publish it.
 
                 setattr(ros_message, attr, getattr(sbp_message, attr))
