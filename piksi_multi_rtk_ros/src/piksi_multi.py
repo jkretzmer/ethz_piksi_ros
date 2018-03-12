@@ -19,8 +19,8 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, PointStamped, PoseWithC
     Transform
 # Import Piksi SBP library
 from sbp.client.drivers.pyserial_driver import PySerialDriver
+from sbp.client.drivers.network_drivers import TCPDriver
 from sbp.client import Handler, Framer
-from sbp.table import dispatch
 from sbp.navigation import *
 from sbp.logging import *
 from sbp.system import *
@@ -43,17 +43,10 @@ import re
 import threading
 import sys
 import collections
-import warnings
-
-# suppress warnings from SBP
-def dispatch_suppress_warn(msg):
-    with warnings.catch_warnings():
-        wanings.simplefilter("ignore")
-        dispatch(msg)
 
 
 class PiksiMulti:
-    LIB_SBP_VERSION_MULTI = '2.2.15'  # SBP version used for Piksi Multi.
+    LIB_SBP_VERSION_MULTI = '2.3.11'  # SBP version used for Piksi Multi.
 
     # Geodetic Constants.
     kSemimajorAxis = 6378137
@@ -83,17 +76,28 @@ class PiksiMulti:
                               installed_sbp_version, PiksiMulti.LIB_SBP_VERSION_MULTI))
 
         # Open a connection to Piksi.
-        serial_port = rospy.get_param('~serial_port', '/dev/ttyUSB0')
-        baud_rate = rospy.get_param('~baud_rate', 115200)
+        use_tcp = rospy.get_param('~use_tcp', False)
+        print('use_tcp: %s'%(use_tcp))
 
-        try:
-            self.driver = PySerialDriver(serial_port, baud=baud_rate)
-        except SystemExit:
-            rospy.logerr("Piksi not found on serial port '%s'", serial_port)
-            raise
+        if use_tcp:
+            tcp_addr = rospy.get_param('~tcp_addr', '192.168.0.222')
+            tcp_port = rospy.get_param('~tcp_port', 55555)
+            try:
+                self.driver = TCPDriver(tcp_addr, tcp_port)
+            except SystemExit:
+                rospy.logerr("Unable to open TCP connection %s:%s", (tcp_addr, tcp_port))
+                raise
+        else:
+            serial_port = rospy.get_param('~serial_port', '/dev/ttyUSB0')
+            baud_rate = rospy.get_param('~baud_rate', 115200)
+            try:
+                self.driver = PySerialDriver(serial_port, baud=baud_rate)
+            except SystemExit:
+                rospy.logerr("Piksi not found on serial port '%s'", serial_port)
+                raise
 
         # Create a handler to connect Piksi driver to callbacks.
-        self.framer = Framer(self.driver.read, self.driver.write, verbose=False, dispatcher=dispatch_suppress_warn)
+        self.framer = Framer(self.driver.read, self.driver.write, verbose=True)
         self.handler = Handler(self.framer)
 
         self.debug_mode = rospy.get_param('~debug_mode', False)
@@ -219,7 +223,7 @@ class PiksiMulti:
         self.init_callback('log', Log,
                            SBP_MSG_LOG, MsgLog, 'level', 'text')
         self.init_callback('baseline_heading', BaselineHeading,
-                           SBP_MSG_BASELINE_HEADING, MsgBaselineHeading, 'tow', 'heading', 'n_sats', 'flags')
+                           SBP_MSG_BASELINE_HEADING, BaselineHeading, 'tow', 'heading', 'n_sats', 'flags')
         self.init_callback('age_of_corrections', AgeOfCorrections,
                            SBP_MSG_AGE_CORRECTIONS, MsgAgeCorrections, 'tow', 'age')
 
@@ -435,7 +439,7 @@ class PiksiMulti:
             for attr in attrs:
                 if attr == 'flags':
                     # Least significat three bits of flags indicate status.
-                    if (sbp_message.flags & 0x07) == 0:
+                    if (msg.flags & 0x07) == 0:
                         return  # Invalid message, do not publish it.
 
                 setattr(ros_message, attr, getattr(sbp_message, attr))
