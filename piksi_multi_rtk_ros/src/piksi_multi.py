@@ -12,11 +12,11 @@ import math
 import numpy as np
 import std_srvs.srv
 # Import message types
-from sensor_msgs.msg import NavSatFix, NavSatStatus
+from sensor_msgs.msg import NavSatFix, NavSatStatus, MagneticField, Imu
 from piksi_rtk_msgs.msg import *
 from piksi_rtk_msgs.srv import *
 from geometry_msgs.msg import PoseWithCovarianceStamped, PointStamped, PoseWithCovariance, Point, TransformStamped, \
-    Transform
+    Transform, Quaternion, Vector3
 # Import Piksi SBP library
 from sbp.client.drivers.pyserial_driver import PySerialDriver
 from sbp.client.drivers.network_drivers import TCPDriver
@@ -33,6 +33,8 @@ from sbp.settings import *
 from zope.interface.exceptions import Invalid
 # Piksi Multi features an IMU
 from sbp.imu import *
+# Piksi Multi features a Magnetometer
+from sbp.mag import *
 # At the moment importing 'sbp.version' module causes ValueError: Cannot find the version number!
 # import sbp.version
 # networking stuff
@@ -126,6 +128,12 @@ class PiksiMulti:
         self.var_rtk_fix = rospy.get_param('~var_rtk_fix', [0.0049, 0.0049, 0.01])
         self.navsatfix_frame_id = rospy.get_param('~navsatfix_frame_id', 'gps')
 
+        # IMU and Mag settings.
+        self.var_ang_vel = rospy.get_param('~var_ang_vel', [0.0049, 0.0049, 0.01])
+        self.var_linear_acc = rospy.get_param('~var_linear_acc', [0.0049, 0.0049, 0.01])
+        self.imu_frame_id = rospy.get_param('~imu_frame_id', 'imu')
+        self.mag_frame_id = rospy.get_param('~mag_frame_id', 'mag')
+
         # Local ENU frame settings.
         self.origin_enu_set = False
         self.latitude0 = 0.0
@@ -193,6 +201,8 @@ class PiksiMulti:
         self.handler.add_callback(self.settings_read_by_index_resp, msg_type=SBP_MSG_SETTINGS_READ_BY_INDEX_RESP)
         self.handler.add_callback(self.callback_sbp_obs, msg_type=SBP_MSG_OBS)
         self.handler.add_callback(self.callback_sbp_base_pos_ecef, msg_type=SBP_MSG_BASE_POS_ECEF)
+        self.handler.add_callback(self.imu_ros_callback, msg_type=SBP_MSG_IMU_RAW)
+        self.handler.add_callback(self.mag_ros_callback, msg_type=SBP_MSG_MAG_RAW)
 
         # Callbacks generated "automatically".
         self.init_callback('baseline_ecef_multi', BaselineEcef,
@@ -228,6 +238,9 @@ class PiksiMulti:
                            SBP_MSG_BASELINE_HEADING, MsgBaselineHeading, 'tow', 'heading', 'n_sats', 'flags')
         self.init_callback('age_of_corrections', AgeOfCorrections,
                            SBP_MSG_AGE_CORRECTIONS, MsgAgeCorrections, 'tow', 'age')
+        self.init_callback('mag_raw_multi', MagRawMulti,
+                            SBP_MSG_MAG_RAW, MsgMagRaw,
+                            'tow', 'tow_f', 'mag_x', 'mag_y', 'mag_z')
 
         # Only if debug mode
         if self.debug_mode:
@@ -331,6 +344,10 @@ class PiksiMulti:
                                                            AgeOfCorrections, queue_size=10)
         publishers['enu_pose_best_fix'] = rospy.Publisher(rospy.get_name() + '/enu_pose_best_fix',
                                                           PoseWithCovarianceStamped, queue_size=10)
+        publishers['mag_raw_multi'] = rospy.Publisher(rospy.get_name() + '/mag_raw',
+                                                        MagRawMulti, queue_size=10)
+        publishers['mag'] = rospy.Publisher(rospy.get_name()+'/mag', MagneticField, queue_size=10)
+        publishers['imu'] = rospy.Publisher(rospy.get_name()+'/imu', Imu, queue_size=10)
         # Topics published only if in "debug mode".
         if self.debug_mode:
             publishers['rtk_float'] = rospy.Publisher(rospy.get_name() + '/navsatfix_rtk_float',
@@ -574,6 +591,89 @@ class PiksiMulti:
 
             if self.base_station_mode:
                 rospy.signal_shutdown("Watchdog triggered, was gps disconnected?")
+
+    def scale_s16(self, value, max_range):
+        value = float(value)
+        max_val = 32767.0
+        min_val = -32768.0
+        min_range = -1 * max_range
+        scale_factor = (2*max_range)/(max_val - min_val)
+        result = (value - min_val) * scale_factor + min_range
+        return result
+
+    def mag_ros_callback(self, msg_raw, **metadata):
+        msg = MsgMagRaw(msg_raw)
+        tow = msg.tow
+        tow_f = msg.tow_f
+        mag_x = (msg.mag_x / 16.0) / 1e6
+        mag_y = (msg.mag_y / 16.0) / 1e6
+        mag_z = 1.923 * ((msg.mag_z / 16.0) / 1e6)
+
+        self.publish_mag(tow, tow_f, mag_x, mag_y, mag_z, self.publishers['mag'])
+
+    def publish_mag(self, tow, tow_f, mag_x, mag_y, mag_z, pub_mag):
+        mag_msg = MagneticField()
+        mag_msg.header.stamp = rospy.Time.now()
+        mag_msg.header.frame_id = self.mag_frame_id
+        mag_msg.magnetic_field_covariance = [1e-6,0,0,1e-6,0,0,1e-6,0,0]
+        mag_msg.magnetic_field = Vector3()
+        mag_msg.magnetic_field.x = mag_x
+        mag_msg.magnetic_field.y = mag_y
+        mag_msg.magnetic_field.z = mag_z
+        pub_mag.publish(mag_msg)
+
+    def imu_ros_callback(self, msg_raw, **metadata):
+        msg = MsgImuRaw(msg_raw)
+        tow = msg.tow
+        tow_f = msg.tow_f
+
+        acc_range = 8.0
+        gyr_range = 1000.0
+
+        xddot = self.scale_s16(msg.acc_x, acc_range) * 9.81
+        yddot = self.scale_s16(msg.acc_y, acc_range) * 9.81
+        zddot = self.scale_s16(msg.acc_z, acc_range) * 9.81
+
+        rdot = math.radians(self.scale_s16(msg.gyr_x, gyr_range))
+        pdot = math.radians(self.scale_s16(msg.gyr_y, gyr_range))
+        ydot = math.radians(self.scale_s16(msg.gyr_z, gyr_range))
+
+        r = 0
+        p = 0
+        y = 0
+
+        self.publish_imu(xddot, yddot, zddot,
+            rdot, pdot, ydot, r, p, y, self.publishers['imu'])
+
+    def publish_imu(self, xddot, yddot, zddot, rdot, pdot, ydot, r, p, y, pub_imu):
+        #acceleration in m/s^2
+        #rotation in radians / s
+        imu_msg = Imu()
+        imu_msg.header.stamp = rospy.Time.now()
+        imu_msg.header.frame_id = self.imu_frame_id
+
+        imu_msg.orientation_covariance = [-1,0,0,0,0,0,0,0,0]
+
+        angular_velocity = Vector3()
+        angular_velocity.x = rdot
+        angular_velocity.y = pdot
+        angular_velocity.z = -1 * ydot
+        imu_msg.angular_velocity = angular_velocity
+        imu_msg.angular_velocity_covariance = [self.var_ang_vel[0], 0, 0,
+                                             0, self.var_ang_vel[1], 0,
+                                             0, 0, self.var_ang_vel[2]]
+
+        linear_acceleration = Vector3()
+        linear_acceleration.x = xddot
+        linear_acceleration.y = yddot
+        linear_acceleration.z = -1 * zddot
+        imu_msg.linear_acceleration = linear_acceleration
+        imu_msg.linear_acceleration_covariance = [self.var_linear_acc[0], 0, 0,
+                                             0, self.var_linear_acc[1], 0,
+                                             0, 0, self.var_linear_acc[2]]
+
+
+        pub_imu.publish(imu_msg)
 
     def pos_llh_callback(self, msg_raw, **metadata):
         msg = MsgPosLLH(msg_raw)

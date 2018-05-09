@@ -3,7 +3,7 @@
 # interface: specifies the interface over which to connect.
 # supported values are 'serial' and 'tcp'
 # if this value is not valid, the driver will default to serial communication
-interface: 'serial'
+interface: 'tcp'
 
 # set this to true if the Swift device is acting as RTK Base Station.
 base_station_mode: false
@@ -29,6 +29,12 @@ base_station_ip_for_latency_estimation: 192.168.0.1
 # Coordinate frame of the GPS receiver with respect to the base link.
 navsatfix_frame_id: 'base_link'
 
+# Coordinate frame of the IMU with respect to the base link.
+imu_frame_id: 'base_link'
+
+# Coordinate frame of the magnetometer with respect to the base link.
+mag_frame_id: 'base_link'
+
 # Covariance Settings
 # Variance to be published in the NavSatFix message (in diagonal part).
 # Single Point Positioning (SPP).
@@ -37,6 +43,11 @@ var_spp: [25.0, 25.0, 64.0]
 var_rtk_float: [25.0, 25.0, 64.0]
 # RTK fix mode.
 var_rtk_fix: [0.0049, 0.0049, 0.01]
+# Angular velocity (IMU).
+var_ang_vel: [0.0049, 0.0049, 0.01]
+# Linear acceleration (IMU).
+var_linear_acc: [0.0049, 0.0049, 0.01]
+
 
 # Serial Settings
 
@@ -53,7 +64,7 @@ baud_rate: 230400
 
 # tcp_addr: the IP address of the receiver. By default, Swift Navigation
 # receivers have an IP address of 192.168.0.222.
-tcp_addr: 192.168.0.222
+tcp_addr: 10.1.23.101
 
 # tcp_port: the port number of the TCP server. By default, Swift Navigation
 # receivers publish SBP data on TCP port 55555.
