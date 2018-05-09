@@ -3,7 +3,7 @@
 # interface: specifies the interface over which to connect.
 # supported values are 'serial' and 'tcp'
 # if this value is not valid, the driver will default to serial communication
-interface: 'tcp'
+interface: 'serial'
 
 # set this to true if the Swift device is acting as RTK Base Station.
 base_station_mode: false
@@ -64,7 +64,7 @@ baud_rate: 230400
 
 # tcp_addr: the IP address of the receiver. By default, Swift Navigation
 # receivers have an IP address of 192.168.0.222.
-tcp_addr: 10.1.23.101
+tcp_addr: 192.168.0.222
 
 # tcp_port: the port number of the TCP server. By default, Swift Navigation
 # receivers publish SBP data on TCP port 55555.
